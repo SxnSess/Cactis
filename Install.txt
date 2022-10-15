@@ -1,0 +1,229 @@
+#####Install Cactis
+
+#####Actualizar los repositorios
+
+sudo apt update 
+
+
+#####Instalamos algunas dependencias 
+
+sudo apt -y install software-properties-common 
+
+sudo apt -y install nginx         <========= Servidor Web
+
+sudo apt install curl vim acl composer fping git graphviz imagemagick mariadb-client mariadb-server mtr-tiny nginx-full python3-memcache python3-mysqldb snmp snmpd whois php-snmp rrdtool librrds-perl -y
+
+
+#####Intalamos PHP y sus extenciones
+
+sudo apt -y install php php-common
+
+sudo apt -y install php-cli php-fpm php-json php-pdo php-mysql php-zip php-gd  php-mbstring php-curl php-xml php-pear php-bcmath php-gmp php-ldap
+
+
+#####Configuración de la base de datos para Cacti
+
+sudo systemctl enable mysql
+
+sudo systemctl restart mysql
+
+sudo mysql -u root -p
+
+
+MariaDB [(none)]> CREATE DATABASE cacti;
+MariaDB [(none)]> CREATE USER 'cactiuser'@'localhost' IDENTIFIED BY 'UTP-2022-acl';
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON cacti.* TO 'cactiuser'@'localhost';
+MariaDB [(none)]> FLUSH PRIVILEGES;
+MariaDB [(none)]> EXIT
+
+
+#####Conceder al usuario de la base de datos el acceso a la base de datos MySQL TimeZone y seleccionar el permiso
+
+sudo mysql -u root -p mysql < /usr/share/mysql/mysql_test_data_timezone.sql
+
+Ingrese su password = UTP-2022-acl
+
+###A continuación, inicie sesión en MariaDB
+
+sudo mysql -u root -p
+Ingrese su password = UTP-2022-acl
+
+###Conceda el permiso a su usuario, por ejemplo, "cactiuser" en este ejempl
+
+MariaDB [(none)]> GRANT SELECT ON mysql.time_zone_name TO cactiuser@localhost;
+MariaDB [(none)]> ALTER DATABASE cacti CHARACTER SET = 'utf8mb4'  COLLATE = 'utf8mb4_unicode_ci';
+MariaDB [(none)]> FLUSH PRIVILEGES;
+MariaDB [(none)]> EXIT
+
+
+###Abra el archivo de MariaDB y añada las siguientes líneas en la sección [mysqld] para una base de datos 
+optimizada
+##Comentar la linea ya existente #collation-server = utf8mb4_unicode_ci
+
+sudo vim /etc/mysql/mariadb.conf.d/50-server.cnf
+
+collation-server = utf8mb4_unicode_ci
+character-set-server  = utf8mb4
+max_heap_table_size = 128M
+tmp_table_size = 64M
+join_buffer_size = 64M
+innodb_file_format = Barracuda
+innodb_large_prefix = 1
+innodb_buffer_pool_size = 1GB
+innodb_doublewrite=OFF
+innodb_buffer_pool_instances = 10
+innodb_flush_log_at_timeout = 3
+innodb_read_io_threads = 32
+innodb_write_io_threads = 16
+innodb_io_capacity = 5000
+innodb_io_capacity_max = 10000
+
+##Reiniciar MariaDB
+
+sudo systemctl restart mysql
+
+
+#####Configurar PHP-FPM para el uso de Cacti
+##Asegurémonos de que date.timezone está configurado en php.ini a una zona horaria preferida
+##En [Fecha] descomente la línea date.timezone y añada su zona horaria
+
+sudo vim /etc/php/*/fpm/php.ini
+
+date.timezone = America/Panama ## Introduzca su zona horaria
+max_execution_time = 300       ## Aumentar el tiempo máximo de ejecución
+memory_limit = 512M            ## Aumentar el límite de memoria
+
+
+#####Actualiza la dirección en la que FPM aceptará las peticiones de FastCGI
+
+sudo vim /etc/php/*/fpm/pool.d/www.conf
+
+listen = /run/php/php-fpm.sock
+
+
+#####Reiniciar PHP-FPM
+
+sudo systemctl restart php*-fpm.service
+
+
+#####Configurar el servidor web Nginx
+
+##Ya que elegimos Nginx como nuestro servidor web preferido, es hora de añadir configuraciones 
+  que podamos servir nuestras páginas de Cacti. Eliminar la página por defecto que se carga 
+  después de la instalación fresca de Nginx
+
+sudo rm /etc/nginx/sites-enabled/default
+
+sudo vim /etc/nginx/conf.d/cacticonfig.conf
+
+server {
+ listen      80;
+ server_name cacti.example.com;
+ root        /var/www/html;
+ index       index.php;
+ access_log  /var/log/nginx/cacti_access.log;
+ error_log   /var/log/nginx/cacti_error.log;
+ charset utf-8;
+ gzip on;
+ gzip_types text/css application/javascript text/javascript application/x-javascript image/svg+xml text/plain text/xsd text/xsl text/xml image/x-icon;
+ location / {
+   try_files $uri $uri/ /index.php?$query_string;
+  }
+  location /api/v0 {
+   try_files $uri $uri/ /api_v0.php?$query_string;
+  }
+  location ~ .php {
+   include fastcgi.conf;
+   fastcgi_split_path_info ^(.+.php)(/.+)$;
+   fastcgi_pass unix:/run/php/php-fpm.sock;
+  }
+  location ~ /.ht {
+   deny all;
+  }
+ }
+
+##Reiniciar el nginx
+
+sudo systemctl restart nginx
+
+
+#####Instalar Cacti server en Debian 11
+##Descargamos el paquetes de la ultima version 
+
+curl -sLO https://www.cacti.net/downloads/cacti-latest.tar.gz
+
+##Descomprimimos el archivo tar
+
+tar -zxvf cacti-latest.tar.gz
+
+
+#####Mover los archivos a nuestro directorio raíz de la web y cambiar el nombre del directorio
+
+sudo mv cacti-1* /var/www/html/
+
+sudo mv /var/www/html/cacti-*/ /var/www/html/cacti
+
+
+#####Cambiar la propiedad de los archivos cacti
+
+sudo chown -R www-data:www-data /var/www/html/
+
+
+#####importar los datos de la base de datos Cacti por defecto a la base de datos Cacti
+
+sudo mysql -u root -p cacti < /var/www/html/cacti/cacti.sql
+
+UTP-2022-acl
+
+
+#####Abra el archivo de configuración de Cacti para introducir la información de la base de datos
+
+sudo vim /var/www/html/cacti/include/config.php
+
+$database_type = "mysql";
+$database_default = "cacti";
+$database_hostname = "localhost";
+$database_username = "cactiuser";
+$database_password = "youpassword"; 
+$database_port = "3306";
+$database_ssl = false;
+
+
+#####Reiniciar Nginx
+##Validar la sintaxis de las configuraciones de nginx
+
+sudo nginx  -t
+
+sudo systemctl restart nginx
+
+
+#####Edite el archivo crontab
+##Para que Cacti realice un sondeo cada pocos minutos, es posible que tenga 
+que añadir lo siguiente en su crontab
+
+sudo vim /etc/cron.d/cacti
+
+*/5 * * * * www-data php /var/www/html/cacti/poller.php > /dev/null 2>&1
+
+##Eso hará que Cacti haga un sondeo cada cinco minutos
+
+
+#####Instalador web
+##Ahora dirígete al instalador web y sigue las instrucciones en pantalla
+
+http:// IP or FQDN /cacti
+
+user: admin 
+password: admin
+
+##Cambie la contraseña por defecto. Introduzca una contraseña larga 
+con caracteres mixtos con una mayúscula y una minúscula, así como con 
+caracteres especiales.
+
+2022-Antonio*
+
+
+
+https://computingforgeeks.com/how-to-install-cacti-on-debian-with-nginx/
+https://www.devopszones.com/2022/06/fix-cacti-php-timezone-error-valid.html
+https://docs.cacti.net/General-Installing-Instructions.md#configure-mysqlmariadb
